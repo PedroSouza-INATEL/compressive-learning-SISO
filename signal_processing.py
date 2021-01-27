@@ -18,17 +18,20 @@ class MonteCarlo():
 
     def signal_process(self, comp_signal, std, gamma_mmse, tau, power, phi):
         # Define indexes of subcarriers transmitting pilot tones
-        # subcarrier_k = np.arange(0, self._m + 1, self._m // self.n_sc)
-        # if self._m == self.n_sc:
-        #     subcarrier_k = subcarrier_k[:-1]
-        # else:
-        #     subcarrier_k[-1] = self._m - 1
-        #     self.n_sc += 1
+        # Comment lines below for perfect CSI!
+        # --------------------------------------------------------------
+        subcarrier_k = np.arange(0, self._m + 1, self._m // self.n_sc)
+        if self._m == self.n_sc:
+            subcarrier_k = subcarrier_k[:-1]
+        else:
+            subcarrier_k[-1] = self._m - 1
+            self.n_sc += 1
+        # --------------------------------------------------------------
 
         n_fft = 2 * self._m
 
         # Choose which class of vector signal to transmit. Classes occurrences
-        # are random (i.i.d) and equiprobable
+        # are random (iid) and equiprobable
         class_idx = np.random.randint(self._c, size=self.mc_runs)
 
         # Initialize complex Gaussian channel coefficients (Rayleigh fading)
@@ -44,9 +47,12 @@ class MonteCarlo():
             # Initialize AWG noise that corrupts MMSE estimation. Its standard
             # deviation does not depend on 'dist', since pilot tones were chosen
             # to have unit power without loss of generality
-            # noise_mmse = (mt.sqrt(1 / gamma_mmse[k]) / mt.sqrt(2)) * \
-            #     (np.random.randn(self.n_sc) + 1j *
-            #      np.random.randn(self.n_sc))
+            # Comment lines below for perfect CSI!
+            # ----------------------------------------------------------
+            noise_mmse = (mt.sqrt(1 / gamma_mmse[k]) / mt.sqrt(2)) * \
+                (np.random.randn(self.n_sc) + 1j *
+                 np.random.randn(self.n_sc))
+            # ----------------------------------------------------------
 
             # Compute frequency selective channel response via FFT
             # of the channel impulse response
@@ -55,13 +61,17 @@ class MonteCarlo():
 
             # Perform MMSE estimation of channel coefficients based on
             # the pilots transmitted by subcarriers
-            # coef_mmse = (1 / (1 + 1 / gamma_mmse[k])) * (coef_fft[subcarrier_k] + noise_mmse)
-            # coef_mmse = coef_fft[subcarrier_k, m] + noise_mmse[:, :, m]
+            # Comment the line below for perfect CSI!
+            coef_mmse = (1 / (1 + 1 / gamma_mmse[k])) * (coef_fft[subcarrier_k] + noise_mmse)
 
             # Compute interpolation of the estimated channel coefficients
-            # func = interpolate.interp1d(subcarrier_k, coef_mmse, kind=1)
-            # self._coef_interp[:, k] = func(np.arange(0, n_fft // 2))
-            self._coef_interp[:, k] = coef_fft[:n_fft // 2]
+            # Comment lines below for perfect CSI!
+            # ------------------------------------------------------------
+            func = interpolate.interp1d(subcarrier_k, coef_mmse, kind=1)
+            self._coef_interp[:, k] = func(np.arange(0, n_fft // 2))
+            # ------------------------------------------------------------
+            # Uncomment line below for perfect CSI!
+            # self._coef_interp[:, k] = coef_fft[:n_fft // 2]
 
             # Corrupt the received signal with channel impairments
             self.rx_signal[k] = comp_signal[class_idx[k]] * coef_fft[:n_fft // 2] + noise
