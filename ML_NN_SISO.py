@@ -1,7 +1,7 @@
 """
     Created on Tue Jan 26/2021
     Last rev. on Tue Jan 27/2021
-    © 2020 Pedro H. C. de Souza
+    © 2021 Pedro H. C. de Souza
            Luciano Leonel Mendes
 """
 import math as mt
