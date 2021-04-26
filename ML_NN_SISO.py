@@ -1,6 +1,6 @@
 """
     Created on Tue Jan 26/2021
-    Last rev. on Tue Jan 27/2021
+    Last rev. on Wed Mar 24/2021
     © 2021 Pedro H. C. de Souza
            Luciano Leonel Mendes
 """
@@ -17,13 +17,13 @@ from scipy.special import erfc
 start_time = time.time()
 
 # Initialize system model parameters
-MC_RUNS = 10**5
+BATCH_MC_RUNS = 10**3
 N_POINTS = 21
 N = 1024
 M = np.array([N, 0.25 * N], dtype=int)
 comp_rate = N // M
 n_curves = np.size(M)
-C = 3
+C = 32
 snr = np.linspace(0, 40, N_POINTS)
 gamma = 10**(snr / 10)
 snr_theory = np.linspace(snr.min(), snr.max(), 100)
@@ -56,6 +56,11 @@ def chi2(g, gamma_theory):
 
 # Neural network hyperparameters initialization
 N_TRAIN = 10**4
+N_BATCH = 500
+N_ITER = N_TRAIN // N_BATCH
+MAX_ITER = 200
+N_ITER_NO_CHANGE = 10
+TOL = 10**-4
 N_LAYER = 10
 N_NEURON = np.tile(200, N_LAYER)
 FUNC_NEURON = 'relu'
@@ -87,7 +92,7 @@ for i in range(C - 1):
 # Initialize variables
 pe_ml = np.zeros([N_POINTS, n_curves])
 pe_nn = np.zeros([N_POINTS, n_curves])
-ml = np.zeros([C, MC_RUNS])
+ml = np.zeros([C, BATCH_MC_RUNS])
 
 # Execute Monte Carlo iterations for each curve
 for i in range(n_curves):
@@ -105,29 +110,57 @@ for i in range(n_curves):
     n_sc_all = 2**(np.arange(1, np.log2(M[i]) + 1))
     n_sc = min(n_sc_all[np.flatnonzero(np.floor(M[i] / bwc) < n_sc_all)]).astype(int)
 
-    # Compute AWG noise standard variation (systems' and MMSEs')
-    snr_uniform = np.random.uniform(snr.min(), snr.max(), N_TRAIN)
-    std = np.sqrt(dist**2 / 10**(snr_uniform / 10))
-    gamma_mmse = 10**(snr_uniform / 10)
-
-    # Invoke class that simulates mutiple data signals transmissions, channel
-    # impairments and MMSE estimation
-    params = MonteCarlo(N_TRAIN, M[i], C, n_sc)
-    rx_signal, class_idx, coef_interp = \
-        params.signal_process(comp_signal, std, gamma_mmse,
-                              tau // comp_rate[i], power, phi)
-
-    # Received signal ready for neural network input
-    rx_signal = np.c_[np.real(rx_signal), np.imag(rx_signal)]
-
-    # Estimated channel coefficients also ready for neural network input
-    ref_signal = coef_interp.T
-    ref_signal = np.c_[np.real(ref_signal), np.imag(ref_signal)]
-
     # Build and train neural network model
-    clf = MLPClassifier(N_NEURON, FUNC_NEURON, learning_rate_init=INIT_ETA,
+    clf = MLPClassifier(N_NEURON, FUNC_NEURON, batch_size=N_BATCH, learning_rate_init=INIT_ETA,
                         random_state=42)  # random_state=42
-    clf.fit(np.c_[rx_signal, ref_signal], class_idx)
+
+    best_loss = np.inf
+    no_improvement_count = 0
+    for epoch in range(MAX_ITER):
+        print("\nEpoch #%d" % (epoch,))
+
+        for step in range(N_ITER):
+            # Compute AWG noise standard variation (systems' and MMSEs')
+            snr_uniform = np.random.uniform(snr.min(), snr.max(), N_BATCH)
+            std = np.sqrt(dist**2 / 10**(snr_uniform / 10))
+            gamma_mmse = np.tile(10**(snr_uniform / 10), N_BATCH)
+
+            # Invoke class that simulates mutiple data signals transmissions, channel
+            # impairments and MMSE estimation
+            params = MonteCarlo(N_BATCH, M[i], C, n_sc)
+            rx_signal, class_idx, coef_interp = \
+                params.signal_process(comp_signal, std, gamma_mmse,
+                                      tau // comp_rate[i], power, phi)
+
+            # Received signal ready for neural network input
+            rx_signal = np.c_[np.real(rx_signal), np.imag(rx_signal)]
+
+            # Estimated channel coefficients also ready for neural network input
+            ref_signal = coef_interp.T
+            ref_signal = np.c_[np.real(ref_signal), np.imag(ref_signal)]
+
+            clf.partial_fit(np.c_[rx_signal, ref_signal], class_idx, np.arange(0, C))
+
+            sys.stdout.write('\r')
+            sys.stdout.write("%.1f" % (100 / N_ITER * (step + 1)))
+            sys.stdout.flush()
+
+        sys.stdout.write("\n Loss: {:.4f}".format(clf.loss_))
+
+        if clf.loss_ > best_loss - TOL:
+            no_improvement_count += 1
+            if no_improvement_count >= N_ITER_NO_CHANGE:
+                sys.stdout.write("\n Loss: {:.4f}".format(clf.loss_))
+                sys.stdout.flush()
+                break
+        else:
+            no_improvement_count = 0
+        if clf.loss_ < best_loss:
+            best_loss = clf.loss_
+
+        sys.stdout.write("\n No improvement count: {:.1f}".format(no_improvement_count))
+        sys.stdout.write("\n Best Loss: {:.4f}".format(best_loss))
+        sys.stdout.flush()
 
     # Compute Monte Carlo iterations for each curve point
     for j in range(N_POINTS):
@@ -141,37 +174,42 @@ for i in range(n_curves):
                                                     (100 / (N_POINTS - 1) * j)))
         sys.stdout.flush()
 
-        # Compute AWG noise standard variation (systems' and MMSEs')
-        std = np.tile(mt.sqrt(dist**2 / gamma[j]), MC_RUNS)
-        gamma_mmse = np.tile(gamma[j], MC_RUNS)
-
         # Clear cumulative error counter
         ERR_ML = 0
         ERR_NN = 0
+        MC_RUNS = 0
 
-        # Invoke class that simulates mutiple data signals transmissions, channel
-        # impairments and MMSE estimation
-        params = MonteCarlo(MC_RUNS, M[i], C, n_sc)
-        rx_signal, class_idx, coef_interp = \
-            params.signal_process(comp_signal, std, gamma_mmse,
-                                  tau // comp_rate[i], power, phi)
+        # Compute AWG noise standard variation (systems' and MMSEs')
+        std = np.tile(mt.sqrt(dist**2 / gamma[j]), BATCH_MC_RUNS)
+        gamma_mmse = np.tile(gamma[j], BATCH_MC_RUNS)
 
-        prob = np.zeros([MC_RUNS, C])
-        ref_signal = coef_interp.T
+        while ERR_ML < 10**3 and MC_RUNS < 10**4:
 
-        # Compute the maximum likelihood statistic on the received signal
-        for p in range(C):
-            ml[p] = np.linalg.norm(rx_signal - comp_signal[p] * ref_signal, axis=1)**2
+            # Invoke class that simulates mutiple data signals transmissions, channel
+            # impairments and MMSE estimation
+            params = MonteCarlo(BATCH_MC_RUNS, M[i], C, n_sc)
+            rx_signal, class_idx, coef_interp = \
+                params.signal_process(comp_signal, std, gamma_mmse,
+                                      tau // comp_rate[i], power, phi)
 
-        ref_signal = np.c_[np.real(ref_signal), np.imag(ref_signal)]
+            prob = np.zeros([BATCH_MC_RUNS, C])
+            ref_signal = coef_interp.T
 
-        # Classes probabilities predicted by the neural network
-        prob = clf.predict_proba(np.c_[np.real(rx_signal),
-                                       np.imag(rx_signal), ref_signal])
+            # Compute the maximum likelihood statistic on the received signal
+            for p in range(C):
+                ml[p] = np.linalg.norm(rx_signal - comp_signal[p] * ref_signal, axis=1)**2
 
-        # Error count
-        ERR_ML = np.sum(np.argmin(ml, 0) != class_idx)
-        ERR_NN = np.sum(np.argmax(prob, 1) != class_idx)
+            ref_signal = np.c_[np.real(ref_signal), np.imag(ref_signal)]
+
+            # Classes probabilities predicted by the neural network
+            prob = clf.predict_proba(np.c_[np.real(rx_signal),
+                                           np.imag(rx_signal), ref_signal])
+
+            # Error count
+            ERR_ML += np.sum(np.argmin(ml, 0) != class_idx)
+            ERR_NN += np.sum(np.argmax(prob, 1) != class_idx)
+
+            MC_RUNS += BATCH_MC_RUNS
 
         # Estimate the probability of error
         pe_ml[j, i] = ERR_ML / MC_RUNS
@@ -220,18 +258,18 @@ plt.legend(by_label.values(), by_label.keys(), prop={'size': 6})
 props = dict(boxstyle='round', facecolor='wheat', alpha=0.75)
 TEXTSTR = '\n'.join(('Rayleigh (selective)', DATA_LABEL, r'$N = %.i$ samples' % N,
                      r'$C = %.i$ classes' % C,
+                     # 'Ideal',
                      r'$N_p = %i$ pilots (for M/N = 1)' % (n_sc * comp_rate[-1] + 1),
                      r'$\tau = $' + np.array2string(tau, separator=',')))
 TEXTSTR_ = '\n'.join(('MLP parameters:',
                       r'$N_{\mathcal{S}_{TR}} = %.E$' % N_TRAIN,
                       r'$L = %.i$' % N_LAYER,
-                      r'$N_\ell = %.i$' % N_NEURON[0],
-                      FUNC_NEURON,
+                      r'$N_\ell = %.i$' % N_NEURON[0],FUNC_NEURON,
                       r'$\eta_{init} = %.E$' % INIT_ETA,
                       SOLVER))
-plt.text(0.025, 0.025, TEXTSTR, transform=ax.transAxes, fontsize='x-small',
+plt.text(0.025, 0.3, TEXTSTR, transform=ax.transAxes, fontsize='x-small',
          verticalalignment='bottom', bbox=props)
-plt.text(0.025, 0.3, TEXTSTR_, transform=ax.transAxes, fontsize='x-small',
+plt.text(0.025, 0.575, TEXTSTR_, transform=ax.transAxes, fontsize='x-small',
          verticalalignment='bottom', bbox=props)
 
 plt.axis([snr.min(), snr.max(), 10**-4, 1])
