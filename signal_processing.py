@@ -14,7 +14,9 @@ class MonteCarlo():
         self._coef_ch = np.zeros(M, dtype=complex)
         # self._coef_fft = np.zeros(n_fft, dtype=complex)
         self._coef_interp = np.zeros([M, MC_RUNS], dtype=complex)
+        # self._coef_interp = np.zeros(M, dtype=complex)
         self.rx_signal = np.zeros([MC_RUNS, M], dtype=complex)
+        # self.rx_signal = np.zeros(M, dtype=complex)
 
     def signal_process(self, comp_signal, std, gamma_mmse, tau, power, phi):
         # Define indexes of subcarriers transmitting pilot tones
@@ -33,10 +35,12 @@ class MonteCarlo():
         # Choose which class of vector signal to transmit. Classes occurrences
         # are random (iid) and equiprobable
         class_idx = np.random.randint(self._c, size=self.mc_runs)
+        # class_idx = np.random.randint(self._c)
 
         # Initialize complex Gaussian channel coefficients (Rayleigh fading)
         coef = (1 / mt.sqrt(2)) * (np.random.randn(self.mc_runs) +
                                    1j * np.random.randn(self.mc_runs))
+        # coef = (1 / mt.sqrt(2)) * (np.random.randn() + 1j * np.random.randn())
 
         # Execute Monte Carlo loop
         for k in range(self.mc_runs):
@@ -51,7 +55,7 @@ class MonteCarlo():
             # ----------------------------------------------------------
             noise_mmse = (mt.sqrt(1 / gamma_mmse[k]) / mt.sqrt(2)) * \
                 (np.random.randn(self.n_sc) + 1j *
-                 np.random.randn(self.n_sc))
+                  np.random.randn(self.n_sc))
             # ----------------------------------------------------------
 
             # Compute frequency selective channel response via FFT
